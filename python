@@ -1,0 +1,105 @@
+# ----------------------------------
+# Imports
+# ----------------------------------
+import os
+import getpass
+from typing import Sequence
+from typing_extensions import TypedDict, Annotated
+
+from langchain_core.messages import (
+    HumanMessage,
+    AIMessage,
+    SystemMessage,
+    BaseMessage
+)
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+
+# ----------------------------------
+# API Key Setup
+# ----------------------------------
+if not os.environ.get("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = 'AIzaSyBFWsWCTyphDz0CTMeO30Ypz1_Hsdg8dN8'
+
+# ----------------------------------
+# Init Model
+# ----------------------------------
+from langchain.chat_models import init_chat_model
+model = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
+
+# ----------------------------------
+# Prompt Template
+# ----------------------------------
+prompt_template = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a helpful assistant. Answer all questions to the best of your ability in {language}.",
+        ),
+        MessagesPlaceholder(variable_name="messages"),
+    ]
+)
+
+# ----------------------------------
+# Define State
+# ----------------------------------
+class State(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    language: str
+
+# ----------------------------------
+# Model Node
+# ----------------------------------
+def call_model(state: State):
+    prompt = prompt_template.invoke(state)
+    response = model.invoke(prompt)
+    return {"messages": [response]}
+
+# ----------------------------------
+# Graph Definition
+# ----------------------------------
+workflow = StateGraph(state_schema=State)
+workflow.add_node("model", call_model)
+workflow.set_entry_point("model")
+
+# ----------------------------------
+# Compile Graph with Memory
+# ----------------------------------
+memory = MemorySaver()
+app = workflow.compile(checkpointer=memory)
+
+# ----------------------------------
+# Helper Function to Run a Chat
+# ----------------------------------
+def run_chat(thread_id: str, query: str, language: str, messages=None):
+    config = {"configurable": {"thread_id": thread_id}}
+    input_messages = [HumanMessage(query)] if messages is None else messages + [HumanMessage(query)]
+    output = app.invoke(
+        {"messages": input_messages, "language": language},
+        config,
+    )
+    output["messages"][-1].pretty_print()
+    return output["messages"]
+
+# ----------------------------------
+# Example Chats
+# ----------------------------------
+
+# 🔹 Start New Thread
+thread_id = "abc123"
+language = "English"
+
+# Step 1
+messages = run_chat(thread_id, "Hi! I'm Bob.", language)
+
+# Step 2
+messages = run_chat(thread_id, "What is my name?", language, messages=messages)
+
+# 🔹 Another User / Language
+thread_id2 = "abc234"
+language2 = "Spanish"
+messages2 = run_chat(thread_id2, "Hola, me llamo Carlos.", language2)
+messages2 = run_chat(thread_id2, "¿Cómo me llamo?", language2, messages=messages2)
